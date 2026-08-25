@@ -83,6 +83,7 @@ def check_mapping(data: dict) -> list[CheckFinding]:
     findings: list[CheckFinding] = []
     findings += _schema_findings(data)
     findings += _reason_findings(data)
+    findings += _requires_findings(data)
     findings += _selector_findings(data)
     findings += _lifecycle_findings(data)
     findings += _unknown_key_findings(data)
@@ -119,6 +120,34 @@ def _reason_findings(data: dict) -> list[CheckFinding]:
                 CheckFinding(
                     "error", "C003",
                     f"third_party {name!r} pins {dep['constraint']!r} with no `why`",
+                )
+            )
+    return findings
+
+
+def _requires_findings(data: dict) -> list[CheckFinding]:
+    """C008 — a lab dependency pinned to a commit with no reason given.
+
+    The same rule as C003 and for the same reason: the SHA is recoverable from
+    `pyproject.toml`, the reason it is frozen there is not. Whether the name
+    resolves to a real package is deliberately NOT checked here — that needs
+    the registry, and this module must run in a repository that has no access
+    to it. `wl-orchestrator`'s `validate.V009` answers that question where it
+    can be answered, and V010 mirrors this rule across the whole registry.
+    """
+    reqs = data.get("requires")
+    if not isinstance(reqs, list):
+        return []
+    findings = []
+    for req in reqs:
+        if not isinstance(req, dict):
+            continue
+        if req.get("pinned_at") and not req.get("why"):
+            name = req.get("name", "(unnamed)")
+            findings.append(
+                CheckFinding(
+                    "error", "C008",
+                    f"requires {name!r} pinned at {req['pinned_at']!r} with no `why`",
                 )
             )
     return findings
