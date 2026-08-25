@@ -29,10 +29,17 @@ def test_manifest_tolerates_fields_from_a_later_schema():
     # Spec 15.4: the orchestrator's own schema is a fourteen-package contract.
     # A manifest written against schema 2 must still parse under schema 1 code,
     # or upgrading becomes a lockstep migration across every package.
-    later = MINIMAL | {"publishes": [{"contract": "job-request", "version": 2}]}
+    #
+    # This used `publishes` as the stand-in for a field this schema version
+    # doesn't know, until Task 1 (the two fields) made `publishes` a real,
+    # validated field — so the placeholder moved to the name this same file
+    # already uses for the concept elsewhere (see `a_later_field` below), and
+    # what is being tested (a genuinely unknown key still parses and still
+    # shows up in `unknown_keys()`) is unchanged.
+    later = MINIMAL | {"a_later_field": [{"contract": "job-request", "version": 2}]}
     m = PackageManifest.model_validate(later)
     assert m.slug == "wl-preproc"
-    assert m.unknown_keys() == {"publishes"}
+    assert m.unknown_keys() == {"a_later_field"}
 
 
 def test_builds_on_is_separate_from_runs_on():
@@ -176,3 +183,111 @@ def test_unknown_keys_inside_a_requirement_are_tolerated():
         "requires": [{"name": "wl-sync", "a_later_field": 1}],
     })
     assert m.requires[0].name == "wl-sync"
+
+
+# --- publishes / consumes: artifacts this package offers and builds on -----
+
+from wl_manifest.models import STABILITIES, Artifact, Consumption
+
+ART_MINIMAL = {
+    "schema": 1, "slug": "wl-preproc", "class": "pipeline",
+    "lifecycle": "active", "visibility": "private",
+    "remote": "https://github.com/jakewesterberg/wl-preproc.git",
+    "summary": "A package.",
+}
+
+
+def test_publishes_and_consumes_default_to_empty():
+    m = PackageManifest.model_validate(ART_MINIMAL)
+    assert m.publishes == [] and m.consumes == []
+
+
+def test_an_artifact_records_what_it_is_and_where_it_lands():
+    m = PackageManifest.model_validate(ART_MINIMAL | {"publishes": [{
+        "name": "session-manifest", "kind": "json-schema",
+        "at": "docs/schemas/session_manifest.json", "stability": "stable",
+        "what": "One record per recording session.",
+    }]})
+    a = m.publishes[0]
+    assert (a.name, a.kind, a.stability) == (
+        "session-manifest", "json-schema", "stable")
+    assert a.at == "docs/schemas/session_manifest.json"
+    assert a.mirrors is None and a.available_after is None
+
+
+def test_a_runtime_artifact_needs_no_path():
+    """The NWB session has no repo path; `at` must be optional."""
+    m = PackageManifest.model_validate(ART_MINIMAL | {"publishes": [{
+        "name": "nwb-session", "kind": "nwb", "stability": "planned",
+        "available_after": "ingest", "what": "Aligned streams on one clock.",
+    }]})
+    assert m.publishes[0].at is None
+    assert m.publishes[0].available_after == "ingest"
+
+
+def test_a_mirror_names_the_package_that_owns_the_artifact():
+    m = PackageManifest.model_validate(ART_MINIMAL | {"publishes": [{
+        "name": "syncbox-log-header", "kind": "json-schema",
+        "at": "docs/schemas/syncbox_log_header.json", "stability": "stable",
+        "mirrors": "wl-sync", "what": "Re-exported from wl-sync.",
+    }]})
+    assert m.publishes[0].mirrors == "wl-sync"
+
+
+def test_a_missing_what_does_not_raise():
+    """Doctrine: a fault is a finding, never a parse error. C010 reports it."""
+    m = PackageManifest.model_validate(ART_MINIMAL | {"publishes": [{
+        "name": "x", "kind": "json-schema", "stability": "stable",
+    }]})
+    assert m.publishes[0].what is None
+
+
+def test_an_unknown_stability_does_not_raise():
+    """C011 reports it. Raising would drop the whole manifest — the failure
+    that once emptied a workstation's software stack."""
+    m = PackageManifest.model_validate(ART_MINIMAL | {"publishes": [{
+        "name": "x", "kind": "nwb", "stability": "eventually", "what": "y",
+    }]})
+    assert m.publishes[0].stability == "eventually"
+
+
+def test_consumption_records_the_name_and_the_reason():
+    m = PackageManifest.model_validate(ART_MINIMAL | {"consumes": [
+        {"name": "nwb-session", "why": "The scrubber replays aligned streams."},
+    ]})
+    assert m.consumes[0].name == "nwb-session"
+    assert "scrubber" in m.consumes[0].why
+
+
+def test_published_and_consumed_names_are_in_declared_order():
+    m = PackageManifest.model_validate(ART_MINIMAL | {
+        "publishes": [
+            {"name": "b", "kind": "k", "stability": "stable", "what": "w"},
+            {"name": "a", "kind": "k", "stability": "stable", "what": "w"},
+        ],
+        "consumes": [{"name": "z"}, {"name": "y"}],
+    })
+    assert m.published_names == ("b", "a")
+    assert m.consumed_names == ("z", "y")
+
+
+def test_owned_names_excludes_mirrors():
+    """A mirror is not a publisher; only the owner appears in owned_names."""
+    m = PackageManifest.model_validate(ART_MINIMAL | {"publishes": [
+        {"name": "mine", "kind": "k", "stability": "stable", "what": "w"},
+        {"name": "theirs", "kind": "k", "stability": "stable", "what": "w",
+         "mirrors": "wl-sync"},
+    ]})
+    assert m.owned_names == ("mine",)
+
+
+def test_the_stability_vocabulary_is_the_three_the_spec_names():
+    assert STABILITIES == frozenset({"stable", "provisional", "planned"})
+
+
+def test_unknown_keys_inside_an_artifact_are_tolerated():
+    m = PackageManifest.model_validate(ART_MINIMAL | {"publishes": [{
+        "name": "x", "kind": "k", "stability": "stable", "what": "w",
+        "a_later_field": 1,
+    }]})
+    assert m.publishes[0].name == "x"

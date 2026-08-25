@@ -101,6 +101,65 @@ class Requirement(_Tolerant):
     why: str | None = None
 
 
+STABILITIES: frozenset[str] = frozenset({"stable", "provisional", "planned"})
+
+
+class Artifact(_Tolerant):
+    """One thing this package offers that another package can build on.
+
+    `name` is lab-unique and this package owns the definition, the way `wl-sync`
+    owns the log format — one way, with CI asserting the direction. Two
+    publishers of one name is `validate.V012`, because ownership would be
+    ambiguous and neither could safely change it.
+
+    `at` is optional because not every artifact is a file in the repository.
+    `wl-preproc`'s NWB session is written at a runtime path recorded in the
+    session manifest; there is nothing here to point at. When `at` IS
+    repo-relative it is checked, which catches the likeliest drift in this
+    field — a schema that moved.
+
+    `mirrors` names the package that owns an artifact this one only re-exports.
+    It exists because the design met a real case it could not otherwise
+    represent: `wl-preproc/docs/schemas/syncbox_log_header.json` is a re-export
+    of `wl-sync`'s `SyncBoxLogHeader`, kept identical by a CI diff, and
+    `wl-preproc`'s own source says it is "re-exported from wl-sync rather than
+    redefined". Without this field, declaring it truthfully would have meant a
+    second publisher of one name.
+
+    `what` is mandatory for the reason a pinned version's `why` is: the shape is
+    recoverable by opening the file, and the meaning is not. Its absence is
+    `check.C010`, never a parse error — enforcing it by raising is what once
+    dropped a package out of every query.
+    """
+
+    name: str
+    kind: str | None = None
+    at: str | None = None
+    stability: str | None = None
+    available_after: str | None = None
+    mirrors: str | None = None
+    what: str | None = None
+
+
+class Consumption(_Tolerant):
+    """One artifact this package builds on.
+
+    Deliberately thin. No `from:` naming the producer — that is a registry
+    lookup, and a copy of it here would be free to go stale. The Phase 1 design
+    ruled this in terms that describe these fields exactly: the registry holds
+    "intent, edges, rulings, and things that do not exist yet" (§15.5).
+
+    Whole-artifact, not parts. Naming parts would make change-impact precise —
+    a producer could see that altering one stream touches nobody who reads
+    another — but it roughly doubles the schema work and makes every part a
+    contract of its own. Nothing here forbids adding them later; the rule for
+    when is the one the `why` requirement earned, after a real failure.
+    """
+
+    name: str
+    why: str | None = None
+
+
 class Status(_Tolerant):
     """Where this package's build actually is. Authored only here."""
 
@@ -152,6 +211,8 @@ class PackageManifest(_Tolerant):
     builds_on: list[str] = Field(default_factory=list)
     third_party: list[ThirdPartyDep] = Field(default_factory=list)
     requires: list[Requirement] = Field(default_factory=list)
+    publishes: list[Artifact] = Field(default_factory=list)
+    consumes: list[Consumption] = Field(default_factory=list)
     superseded_by: str | None = None
     retention_reason: str | None = None
 
@@ -176,6 +237,25 @@ class PackageManifest(_Tolerant):
         not learn about the lab.
         """
         return tuple(r.name for r in self.requires)
+
+    @property
+    def published_names(self) -> tuple[str, ...]:
+        """Every artifact this package declares, mirrors included."""
+        return tuple(a.name for a in self.publishes)
+
+    @property
+    def owned_names(self) -> tuple[str, ...]:
+        """Artifacts this package defines, excluding ones it only mirrors.
+
+        The distinction is what lets a mirror exist without becoming a second
+        publisher: `wlo dependents` and the brief resolve a mirrored artifact
+        to its owner, not to the package holding the copy.
+        """
+        return tuple(a.name for a in self.publishes if not a.mirrors)
+
+    @property
+    def consumed_names(self) -> tuple[str, ...]:
+        return tuple(c.name for c in self.consumes)
 
     @property
     def reach(self) -> tuple[HostSelector, ...]:
