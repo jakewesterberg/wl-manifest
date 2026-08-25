@@ -45,5 +45,30 @@ def test_wl_orchestrator_is_not_importable_from_here():
 
 def test_no_module_mentions_the_orchestrator():
     root = pathlib.Path(wl_manifest.__file__).parent
-    for module in root.glob("*.py"):
+    for module in root.rglob("*.py"):
         assert "wl_orchestrator" not in module.read_text(), module
+
+
+def test_the_scan_reaches_a_nested_module(tmp_path, monkeypatch):
+    """A subpackage must not be a blind spot.
+
+    The scan used a flat `glob`, which stops at the top level. That was
+    harmless while this package is flat and wrong the day it is not — and a
+    direction check that quietly stops looking is worse than no check, because
+    it reads as enforcement. `wl-orchestrator` closed the same hole in its own
+    CI at 69b8fef; this repository had kept the flat form.
+    """
+    import wl_manifest
+
+    root = pathlib.Path(wl_manifest.__file__).parent
+    nested = root / "_scan_probe" / "deep.py"
+    nested.parent.mkdir(exist_ok=True)
+    nested.write_text("import wl_orchestrator\n")
+    try:
+        offenders = [p for p in root.rglob("*.py") if "wl_orchestrator" in p.read_text()]
+        assert nested in offenders, "a nested violation must be visible to the scan"
+        flat = [p for p in root.glob("*.py") if "wl_orchestrator" in p.read_text()]
+        assert nested not in flat, "the flat form is what missed it"
+    finally:
+        nested.unlink()
+        nested.parent.rmdir()

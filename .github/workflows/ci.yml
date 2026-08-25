@@ -14,6 +14,15 @@ jobs:
         run: python -m pytest -q -ra
       - name: The contract does not import the lab
         run: |
-          ! python -c "import wl_manifest, wl_orchestrator" 2>/dev/null
+          python - <<'PY'
+          import pathlib, sys
+          import wl_manifest
+          root = pathlib.Path(wl_manifest.__file__).parent
+          bad = [p for p in root.rglob("*.py") if "wl_orchestrator" in p.read_text()]
+          if bad:
+              print("wl_manifest must not import wl_orchestrator:", bad)
+              sys.exit(1)
+          print("direction holds")
+          PY
       - name: It checks its own manifest
         run: wl-check .

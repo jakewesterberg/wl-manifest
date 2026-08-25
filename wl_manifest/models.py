@@ -1,8 +1,10 @@
 """The `wl.yaml` contract, and nothing that reads the lab.
 
-This package exists so that thirteen repositories can depend on the manifest
+This package exists so that the lab's repositories can depend on the manifest
 schema without depending on the orchestrator's registry, which changes far more
-often than the schema may. The direction is one-way and enforced in CI:
+often than the schema may. Ten registry entries sit at a lifecycle stage that
+has a repository, not counting this package itself. The direction is one-way
+and enforced in CI by a recursive scan of this package's source:
 `wl_manifest` must never import `wl-orchestrator`.
 
 `Declaration` and `RegistryEntry` are deliberately absent. They describe

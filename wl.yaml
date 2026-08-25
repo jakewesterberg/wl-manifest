@@ -22,5 +22,10 @@ third_party:
       throughout for forward-tolerant models; 2.6 matches the floor
       wl-orchestrator already pins.
 status:
-  phase: extracted from wl-orchestrator; not yet depended on by any repository
-  next: wl-orchestrator switches over, then dev repositories add the CI step
+  phase: >-
+    extracted from wl-orchestrator, which now depends on it. No remote yet, so
+    it is installable only from a local checkout and no other repository can
+    consume it.
+  next: >-
+    a remote, so wl-orchestrator can pin it by commit SHA the way wl-preproc
+    pins wl-sync, and dev repositories can install it in CI
