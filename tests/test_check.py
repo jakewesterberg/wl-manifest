@@ -1,0 +1,184 @@
+# tests/test_check.py
+from __future__ import annotations
+
+import pathlib
+
+import pytest
+
+from wl_manifest.check import CheckFinding, check_file, check_mapping, has_errors
+
+GOOD = {
+    "schema": 1,
+    "slug": "wl-example",
+    # The brief's own fixture (and the adoption plan it's drawn from) uses
+    # "library" here, but PackageClass in models.py has never included that
+    # value — only device/pipeline/application/resource/playbook/experiment/
+    # coordination are accepted (see wl_manifest/models.py). Adding
+    # "library" to the schema is out of this task's scope (models.py is not
+    # in Task 1's file list), so this fixture uses a class that is actually
+    # valid today; the choice of *which* valid class is otherwise arbitrary.
+    "class": "resource",
+    "lifecycle": "active",
+    "visibility": "private",
+    "remote": "git@github.com:example/wl-example.git",
+    "summary": "An example package.",
+    "runs_on": ["dws", "serv/preproc"],
+    "builds_on": ["dws"],
+    "third_party": [{"name": "kilosort", "constraint": ">=4.0", "why": "spec §6"}],
+    "status": {"phase": "building", "describes": "abc123"},
+}
+
+
+def codes(findings: list[CheckFinding]) -> list[str]:
+    return [f.code for f in findings]
+
+
+def test_a_good_manifest_produces_no_findings():
+    assert check_mapping(GOOD) == []
+
+
+def test_c002_reports_each_missing_required_field_without_raising():
+    findings = check_mapping({"schema": 1, "slug": "wl-x"})
+    assert "C002" in codes(findings)
+    assert all(f.level == "error" for f in findings if f.code == "C002")
+
+
+def test_c003_names_the_dependency_that_pins_without_a_reason():
+    bad = {**GOOD, "third_party": [{"name": "kilosort", "constraint": ">=4.0"}]}
+    findings = check_mapping(bad)
+    assert "C003" in codes(findings)
+    assert "kilosort" in " ".join(f.message for f in findings)
+
+
+def test_c003_does_not_suppress_the_rest_of_the_manifest():
+    """The blast-radius regression: one bad dep must not lose the manifest."""
+    bad = {**GOOD, "third_party": [{"name": "kilosort", "constraint": ">=4.0"}],
+           "runs_on": ["not-a-class"]}
+    findings = check_mapping(bad)
+    assert "C003" in codes(findings)
+    assert "C004" in codes(findings)  # still checked, not short-circuited
+
+
+def test_c004_reports_unknown_and_malformed_selectors():
+    findings = check_mapping({**GOOD, "runs_on": ["dwss", "rig/", "serv/preproc"]})
+    assert codes(findings).count("C004") == 2
+
+
+def test_c005_rejects_a_lifecycle_that_implies_no_repository():
+    findings = check_mapping({**GOOD, "lifecycle": "named"})
+    assert "C005" in codes(findings)
+
+
+def test_c006_reports_unknown_keys_as_notes_not_errors():
+    findings = check_mapping({**GOOD, "quantum_flux": 7})
+    note = next(f for f in findings if f.code == "C006")
+    assert note.level == "note"
+    assert "quantum_flux" in note.message
+    assert not has_errors(findings)
+
+
+def test_c006_is_not_suppressed_by_an_unrelated_c002():
+    """Forward tolerance regression: a manifest can fail validation for one
+    reason (a missing `summary`) and still need its unknown key surfaced —
+    that is exactly the later-schema case C006 exists for, and it must not
+    depend on the rest of the manifest validating cleanly first."""
+    bad = {k: v for k, v in GOOD.items() if k != "summary"}
+    bad["quantum_flux"] = 7
+    findings = check_mapping(bad)
+    assert "C002" in codes(findings)
+    assert "C006" in codes(findings)
+
+
+def test_c006_stringifies_non_string_keys_without_raising():
+    """YAML 1.1's implicit typing (the 'Norway problem') means a top-level
+    key is not always a string: a bare `on`/`off`/`yes`/`no`/`true`/`false`
+    resolves to a bool, and a bare digit key to an int. Both are genuinely
+    unknown keys and must be named in the C006 note rather than crashing
+    `sorted()`/`.join()` on a mixed-type set."""
+    bad = {**GOOD, True: "something", 7: "seven"}
+    findings = check_mapping(bad)
+    note = next(f for f in findings if f.code == "C006")
+    assert "True" in note.message
+    assert "7" in note.message
+
+
+def test_c007_notes_a_missing_status():
+    findings = check_mapping({k: v for k, v in GOOD.items() if k != "status"})
+    assert "C007" in codes(findings)
+    assert not has_errors(findings)
+
+
+def test_c001_on_unparseable_yaml(tmp_path: pathlib.Path):
+    p = tmp_path / "wl.yaml"
+    p.write_text("key: [unclosed\n")
+    findings = check_file(p)
+    assert codes(findings) == ["C001"]
+
+
+def test_c001_when_the_top_level_is_not_a_mapping(tmp_path: pathlib.Path):
+    p = tmp_path / "wl.yaml"
+    p.write_text("- just\n- a list\n")
+    assert codes(check_file(p)) == ["C001"]
+
+
+def test_c001_on_invalid_utf8(tmp_path: pathlib.Path):
+    """Never-raises regression: `Path.read_text` raises `UnicodeDecodeError`
+    on bad bytes, which is a `ValueError` and not an `OSError` — a narrower
+    except clause here would let this one case through as a traceback
+    instead of a finding."""
+    p = tmp_path / "wl.yaml"
+    p.write_bytes(b"key: \xff\xfe")
+    findings = check_file(p)
+    assert codes(findings) == ["C001"]
+
+
+def test_c006_survives_yaml_implicit_typing_through_check_file(tmp_path: pathlib.Path):
+    """The path a repository actually hits: PyYAML resolves a bare `on:`
+    key to a boolean, not a string, before check_mapping ever sees it. This
+    must still surface as a C006 note, not a traceback."""
+    p = tmp_path / "wl.yaml"
+    p.write_text(
+        "schema: 1\n"
+        "slug: wl-example\n"
+        "class: resource\n"
+        "lifecycle: active\n"
+        "visibility: private\n"
+        "remote: git@github.com:example/wl-example.git\n"
+        "summary: An example package.\n"
+        "on: something\n"
+    )
+    findings = check_file(p)
+    note = next(f for f in findings if f.code == "C006")
+    assert "True" in note.message
+
+
+def test_check_file_reads_a_good_manifest(tmp_path: pathlib.Path):
+    import yaml
+    p = tmp_path / "wl.yaml"
+    p.write_text(yaml.safe_dump(GOOD))
+    assert check_file(p) == []
+
+
+def test_check_never_raises_on_arbitrary_junk():
+    for junk in [{}, {"schema": "not-an-int"}, {"third_party": "not-a-list"},
+                 {"runs_on": 3}, {"status": "not-a-mapping"}]:
+        assert isinstance(check_mapping(junk), list)
+
+
+def test_the_checker_imports_no_lab_state():
+    """Scope guard: the spec's §2 promise, enforced rather than trusted.
+
+    Checks both forms a forbidden module could be pulled in by:
+    `import wl_manifest.registry` and `from wl_manifest.registry
+    import X`. An earlier version of this guard checked only for the
+    substrings "import registry" and "from wl_manifest.registry" —
+    which catches the second form, but not the first: "import
+    wl_manifest.registry" contains neither substring, so it passed
+    silently. A guard with a known hole is worse than one whose limits are
+    understood, because later readers trust it.
+    """
+    import wl_manifest.check as mod
+    source = pathlib.Path(mod.__file__).read_text()
+    for forbidden in ("registry", "workspace", "validate", "thirdparty", "reconcile"):
+        assert f"import wl_manifest.{forbidden}" not in source
+        assert f"from wl_manifest.{forbidden}" not in source

@@ -1,0 +1,26 @@
+schema: 1
+slug: wl-manifest
+class: resource
+lifecycle: scaffolded
+visibility: private
+remote: https://github.com/jakewesterberg/wl-manifest.git
+summary: >-
+  The wl.yaml contract — schema, host selectors, and the single-package check
+  every lab repository runs against its own manifest.
+runs_on: []
+builds_on: [dws]
+third_party:
+  - name: python
+    constraint: ">=3.11"
+    why: >-
+      PEP 604 unions (`str | None`) in the schema need at least 3.10; 3.11
+      matches the floor wl-sync, wl-preproc and wl-orchestrator already share.
+  - name: pydantic
+    constraint: ">=2.6"
+    why: >-
+      `ConfigDict(extra="allow")` and `model_extra` are pydantic v2 APIs, used
+      throughout for forward-tolerant models; 2.6 matches the floor
+      wl-orchestrator already pins.
+status:
+  phase: extracted from wl-orchestrator; not yet depended on by any repository
+  next: wl-orchestrator switches over, then dev repositories add the CI step
