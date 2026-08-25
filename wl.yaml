@@ -2,7 +2,7 @@ schema: 1
 slug: wl-manifest
 class: resource
 lifecycle: scaffolded
-visibility: private
+visibility: public
 remote: https://github.com/jakewesterberg/wl-manifest.git
 summary: >-
   The wl.yaml contract — schema, host selectors, and the single-package check
@@ -23,9 +23,9 @@ third_party:
       wl-orchestrator already pins.
 status:
   phase: >-
-    extracted from wl-orchestrator, which now depends on it. No remote yet, so
-    it is installable only from a local checkout and no other repository can
-    consume it.
+    published at github.com/jakewesterberg/wl-manifest and installable without a
+    credential; wl-orchestrator pins it by commit SHA the way wl-preproc pins
+    wl-sync.
   next: >-
-    a remote, so wl-orchestrator can pin it by commit SHA the way wl-preproc
-    pins wl-sync, and dev repositories can install it in CI
+    the lab's repositories add the CI step that runs wl-check against their own
+    manifest
