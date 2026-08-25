@@ -165,20 +165,3 @@ def test_check_never_raises_on_arbitrary_junk():
         assert isinstance(check_mapping(junk), list)
 
 
-def test_the_checker_imports_no_lab_state():
-    """Scope guard: the spec's §2 promise, enforced rather than trusted.
-
-    Checks both forms a forbidden module could be pulled in by:
-    `import wl_manifest.registry` and `from wl_manifest.registry
-    import X`. An earlier version of this guard checked only for the
-    substrings "import registry" and "from wl_manifest.registry" —
-    which catches the second form, but not the first: "import
-    wl_manifest.registry" contains neither substring, so it passed
-    silently. A guard with a known hole is worse than one whose limits are
-    understood, because later readers trust it.
-    """
-    import wl_manifest.check as mod
-    source = pathlib.Path(mod.__file__).read_text()
-    for forbidden in ("registry", "workspace", "validate", "thirdparty", "reconcile"):
-        assert f"import wl_manifest.{forbidden}" not in source
-        assert f"from wl_manifest.{forbidden}" not in source

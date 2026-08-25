@@ -15,7 +15,8 @@ identity, status and declarations are written.
 Every model allows extra keys. That is deliberate and load-bearing: a manifest
 written against a later `schema:` must parse under earlier code, or upgrading
 the format becomes a simultaneous migration across fourteen repositories
-(spec section 15.4). Unknown keys are reported as notes by `wlo validate`,
+(spec section 15.4). Unknown keys are reported as notes by `wl-check` here and
+by `wl-orchestrator`'s `wlo validate` there,
 never as errors, so a typo is still visible without being fatal.
 """
 
@@ -54,9 +55,10 @@ class ThirdPartyDep(_Tolerant):
 
     A `constraint` without a `why` is a fault (spec §6: the constraint is
     recoverable from code, the reasoning is not), but it is not a parse error.
-    Enforcing it here raised out of `model_validate`, which `workspace.py`
-    catches as an unreadable file — so one unexplained pin removed the whole
-    package from every query, and `wlo stack` returned an empty stack for a
+    Enforcing it here raised out of `model_validate`, which `wl-orchestrator`'s
+    `workspace.py` catches as an unreadable file — so one unexplained pin
+    removed the whole package from every query, and `wlo stack` returned an
+    empty stack for a
     machine that needed one. The rule now lives where findings live:
     `validate.V008` for the registry, `check.C003` for a single repository.
     """
@@ -126,8 +128,9 @@ class PackageManifest(_Tolerant):
 
         `runs_on` and `builds_on` are different questions but the same
         namespace, and "which selectors does this manifest touch" was written
-        out three times — twice in thirdparty.py and once in validate.py. It is
-        written here once, and `reach` is the parsed form of it.
+        out three times — twice in `wl-orchestrator`'s thirdparty.py and once
+        in its validate.py. It is written here once, and `reach` is the parsed
+        form of it.
         """
         return (*self.runs_on, *self.builds_on)
 
@@ -135,13 +138,14 @@ class PackageManifest(_Tolerant):
     def reach(self) -> tuple[HostSelector, ...]:
         """`declared_hosts`, parsed — with anything unparseable dropped.
 
-        Tolerating bad input here is deliberate. `wlo validate` already reports
+        Tolerating bad input here is deliberate. `wl-orchestrator`'s `wlo validate`
+        already reports
         every malformed selector as a V004 error against the package that wrote
         it, so nothing is hidden by skipping it. What is avoided is far worse:
         parsing unguarded meant one package writing `builds_on: [dwss]` turned
         every `wlo stack` query in the lab into an unhandled ValueError —
         including `stack serv` and `stack rig`, classes that package has nothing
-        to do with. That contradicts validate.py's own contract that a broken
+        to do with. That contradicts that repository's validate.py contract that a broken
         registry stops the registry and not the lab, and workspace.py already
         takes the same care with a sibling it cannot stat. An advisory tool
         degrades; it does not take the lab down with the manifest that broke.
@@ -151,7 +155,7 @@ class PackageManifest(_Tolerant):
             try:
                 parsed.append(HostSelector.parse(text))
             except ValueError:
-                continue  # reported as V004 by validate.py
+                continue  # reported as V004 by wl-orchestrator
         return tuple(parsed)
 
     def unknown_keys(self) -> set[str]:

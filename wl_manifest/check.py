@@ -4,12 +4,12 @@ This module is deliberately the narrowest thing in the repository. It reads a
 single file, imports no registry and no workspace, and never raises: every
 fault it finds becomes a `CheckFinding`. That shape is what lets it run inside
 another repository's CI, where failing on a neighbour's fault would be
-indefensible — `wlo validate` cannot be used there for exactly that reason, as
-`cli/main.py` records.
+indefensible — `wl-orchestrator`'s `wlo validate` cannot be used there for
+exactly that reason, as its `cli/main.py` records.
 
 The rules answer one question: is this manifest true about the repository it
-sits in? Not "is the lab consistent" — that stays in `validate.py`, which has
-the registry to compare against.
+sits in? Not "is the lab consistent" — that stays in `wl-orchestrator`'s
+`validate.py`, which has the registry to compare against.
 """
 
 from __future__ import annotations
