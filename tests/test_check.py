@@ -165,3 +165,40 @@ def test_check_never_raises_on_arbitrary_junk():
         assert isinstance(check_mapping(junk), list)
 
 
+
+
+# --- C008: a lab dependency pinned without a reason -------------------------
+
+def test_c008_names_the_package_pinned_without_a_reason():
+    bad = {**GOOD, "requires": [{"name": "wl-sync", "pinned_at": "abc1234"}]}
+    findings = check_mapping(bad)
+    c008 = [f for f in findings if f.code == "C008"]
+    assert len(c008) == 1
+    assert c008[0].level == "error"
+    assert "wl-sync" in c008[0].message and "abc1234" in c008[0].message
+
+
+def test_c008_is_silent_when_the_pin_is_explained():
+    ok = {**GOOD, "requires": [
+        {"name": "wl-sync", "pinned_at": "abc1234", "why": "owns the log format"},
+    ]}
+    assert "C008" not in [f.code for f in check_mapping(ok)]
+
+
+def test_c008_is_silent_on_an_unpinned_dependency():
+    """An unpinned edge is a fact, not a fault."""
+    assert "C008" not in [f.code for f in check_mapping({**GOOD, "requires": [{"name": "wl-style"}]})]
+
+
+def test_c008_reports_every_offender_not_just_the_first():
+    bad = {**GOOD, "requires": [
+        {"name": "wl-sync", "pinned_at": "aaa"},
+        {"name": "wl-style", "pinned_at": "bbb"},
+    ]}
+    assert [f.code for f in check_mapping(bad)].count("C008") == 2
+
+
+def test_c008_survives_requires_being_junk():
+    """The never-raises invariant reaches the new rule."""
+    for junk in ["not-a-list", 3, None, [None], ["a string"], [{"no_name": 1, "pinned_at": "x"}]]:
+        assert isinstance(check_mapping({**GOOD, "requires": junk}), list)

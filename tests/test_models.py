@@ -109,3 +109,70 @@ def test_status_still_parses_the_old_branch_and_updated_keys():
     )
     assert s.phase == "Phase 1c-4 (timebase)"
     assert s.unknown_keys() == {"branch", "updated"}
+
+
+# --- requires: lab-internal dependencies -----------------------------------
+
+REQ_MINIMAL = {
+    "schema": 1,
+    "slug": "wl-preproc",
+    "class": "pipeline",
+    "lifecycle": "active",
+    "visibility": "private",
+    "remote": "https://github.com/jakewesterberg/wl-preproc.git",
+    "summary": "A package.",
+}
+
+
+def test_requires_defaults_to_empty():
+    m = PackageManifest.model_validate(REQ_MINIMAL)
+    assert m.requires == []
+
+
+def test_a_requirement_records_the_pin_and_the_reason():
+    m = PackageManifest.model_validate(REQ_MINIMAL | {
+        "requires": [{
+            "name": "wl-sync",
+            "pinned_at": "abc1234",
+            "for": "session identity and the log format",
+            "why": "the sync box owns them; a local copy would drift silently",
+        }],
+    })
+    r = m.requires[0]
+    assert (r.name, r.pinned_at) == ("wl-sync", "abc1234")
+    assert r.for_ == "session identity and the log format"
+    assert "drift" in r.why
+
+
+def test_a_requirement_needs_neither_pin_nor_reason():
+    """An unpinned dependency is a fact, not a fault. V009 still resolves it."""
+    m = PackageManifest.model_validate(REQ_MINIMAL | {
+        "requires": [{"name": "wl-style"}],
+    })
+    assert m.requires[0].pinned_at is None
+    assert m.requires[0].why is None
+
+
+def test_an_unexplained_pin_does_not_raise():
+    """Same doctrine as ThirdPartyDep: a fault becomes a finding, never a
+    parse error. The raising version of that rule once dropped a whole package
+    out of every query and emptied a workstation's software stack."""
+    m = PackageManifest.model_validate(REQ_MINIMAL | {
+        "requires": [{"name": "wl-sync", "pinned_at": "abc1234"}],
+    })
+    assert m.requires[0].why is None
+
+
+def test_required_slugs_is_the_names_in_order():
+    m = PackageManifest.model_validate(REQ_MINIMAL | {
+        "requires": [{"name": "wl-sync"}, {"name": "wl-style"}],
+    })
+    assert m.required_slugs == ("wl-sync", "wl-style")
+
+
+def test_unknown_keys_inside_a_requirement_are_tolerated():
+    """Forward tolerance reaches nested models, or a later schema breaks here."""
+    m = PackageManifest.model_validate(REQ_MINIMAL | {
+        "requires": [{"name": "wl-sync", "a_later_field": 1}],
+    })
+    assert m.requires[0].name == "wl-sync"

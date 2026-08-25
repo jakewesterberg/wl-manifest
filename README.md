@@ -40,7 +40,7 @@ no errors, `1` at least one error, `2` no manifest found.
 
 Run it from a repository's own root, or point it at a directory or a file
 directly: `wl-check ../wl-preproc`, `wl-check some/other/wl.yaml`. Findings
-print one per line — a level, a code (`C001`–`C007`), a message — and the
+print one per line — a level, a code (`C001`–`C008`), a message — and the
 command never raises: a malformed manifest is a finding, not a traceback.
 Exit 0 means no `error`-level finding; a lone `note` still exits 0.
 

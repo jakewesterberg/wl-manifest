@@ -60,14 +60,44 @@ class ThirdPartyDep(_Tolerant):
     Enforcing it here raised out of `model_validate`, which `wl-orchestrator`'s
     `workspace.py` catches as an unreadable file — so one unexplained pin
     removed the whole package from every query, and `wlo stack` returned an
-    empty stack for a
-    machine that needed one. The rule now lives where findings live:
+    empty stack for a machine that needed one. The rule now lives where
+    findings live:
     `validate.V008` for the registry, `check.C003` for a single repository.
     """
 
     name: str
     constraint: str | None = None
     where: str | None = None
+    why: str | None = None
+
+
+class Requirement(_Tolerant):
+    """One lab package this package depends on.
+
+    Distinct from `third_party`, which records software the lab does not write.
+    This records an edge inside the lab, and it is the only place such an edge
+    is written down: the dependency itself lives in `pyproject.toml`, where no
+    other repository can see it. `wl-preproc` has pinned `wl-sync` by commit
+    since long before this field existed, and nothing outside that repository
+    knew.
+
+    `pinned_at` is the commit depended on, when there is one. An unpinned
+    dependency is a fact, not a fault — but a pin without a `why` is, for the
+    same reason a version constraint is (spec §6): the SHA is recoverable from
+    `pyproject.toml`, and the reason it is frozen there is not. That fault is a
+    finding, never a parse error — `validate.V010` across the registry,
+    `check.C008` inside one repository. Raising instead was tried, and one
+    unexplained pin silently emptied a workstation's software stack.
+
+    `for` says what is consumed, and it is what makes the answer to "who breaks
+    if I change this" actionable rather than merely true. It is spelled `for_`
+    in Python because `for` is a keyword, the same accommodation `class` and
+    `schema` already need.
+    """
+
+    name: str
+    pinned_at: str | None = None
+    for_: str | None = Field(default=None, alias="for")
     why: str | None = None
 
 
@@ -121,6 +151,7 @@ class PackageManifest(_Tolerant):
     # any stack and that catalog entry has no declared source.
     builds_on: list[str] = Field(default_factory=list)
     third_party: list[ThirdPartyDep] = Field(default_factory=list)
+    requires: list[Requirement] = Field(default_factory=list)
     superseded_by: str | None = None
     retention_reason: str | None = None
 
@@ -135,6 +166,16 @@ class PackageManifest(_Tolerant):
         form of it.
         """
         return (*self.runs_on, *self.builds_on)
+
+    @property
+    def required_slugs(self) -> tuple[str, ...]:
+        """Every lab package this one names, in the order it names them.
+
+        The names as written. Resolving them through aliases needs the
+        registry, so that belongs to `validate`, not here — this package must
+        not learn about the lab.
+        """
+        return tuple(r.name for r in self.requires)
 
     @property
     def reach(self) -> tuple[HostSelector, ...]:

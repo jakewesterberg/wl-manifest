@@ -9,6 +9,7 @@ from wl_manifest.models import (
     Lifecycle,
     PackageClass,
     PackageManifest,
+    Requirement,
     Status,
     ThirdPartyDep,
     Visibility,
@@ -18,6 +19,7 @@ from wl_manifest.models import (
 __all__ = [
     "CheckFinding", "check_file", "check_mapping", "has_errors",
     "HOST_CLASSES", "HostSelector", "STAGES_WITH_REPO", "Lifecycle",
-    "PackageClass", "PackageManifest", "Status", "ThirdPartyDep", "Visibility",
+    "PackageClass", "PackageManifest", "Requirement", "Status", "ThirdPartyDep",
+    "Visibility",
     "_Tolerant",
 ]
