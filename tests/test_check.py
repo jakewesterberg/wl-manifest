@@ -202,3 +202,153 @@ def test_c008_survives_requires_being_junk():
     """The never-raises invariant reaches the new rule."""
     for junk in ["not-a-list", 3, None, [None], ["a string"], [{"no_name": 1, "pinned_at": "x"}]]:
         assert isinstance(check_mapping({**GOOD, "requires": junk}), list)
+
+
+# --- C009-C012: the `publishes` and `consumes` rules -----------------------
+
+ART_GOOD = {
+    **GOOD,
+    "publishes": [{
+        "name": "session-manifest", "kind": "json-schema",
+        "at": "docs/schemas/session_manifest.json", "stability": "stable",
+        "what": "One record per session.",
+    }],
+}
+
+
+def test_c009_reports_a_declared_path_that_is_not_there(tmp_path):
+    findings = check_mapping(ART_GOOD, root=tmp_path)
+    c009 = [f for f in findings if f.code == "C009"]
+    assert len(c009) == 1 and c009[0].level == "error"
+    assert "session_manifest.json" in c009[0].message
+
+
+def test_c009_is_silent_when_the_file_exists(tmp_path):
+    p = tmp_path / "docs" / "schemas"
+    p.mkdir(parents=True)
+    (p / "session_manifest.json").write_text("{}")
+    assert "C009" not in [f.code for f in check_mapping(ART_GOOD, root=tmp_path)]
+
+
+def test_c009_is_skipped_without_a_root():
+    """check_mapping stays pure when no directory is given."""
+    assert "C009" not in [f.code for f in check_mapping(ART_GOOD)]
+
+
+def test_c009_does_not_check_a_runtime_description(tmp_path):
+    data = {**GOOD, "publishes": [{
+        "name": "nwb-session", "kind": "nwb", "stability": "planned",
+        "at": "<runtime — the archive path in the session manifest>",
+        "what": "Aligned streams.",
+    }]}
+    assert "C009" not in [f.code for f in check_mapping(data, root=tmp_path)]
+
+
+def test_c009_does_not_check_an_absolute_path(tmp_path):
+    data = {**GOOD, "publishes": [{
+        "name": "x", "kind": "nwb", "stability": "stable",
+        "at": "/data/sessions", "what": "y",
+    }]}
+    assert "C009" not in [f.code for f in check_mapping(data, root=tmp_path)]
+
+
+def test_c009_reports_a_path_that_escapes_the_package(tmp_path):
+    """Not absolute, no `<` -- ../wl-preproc/... looks repo-relative by
+    `_looks_repo_relative`'s own rule. It is not: it reads a sibling
+    package. The file genuinely exists one directory up, mirroring the
+    coordinator's own reproduction, so a plain existence check would stay
+    silent -- only a containment check catches this."""
+    root = tmp_path / "wl-manifest"
+    root.mkdir()
+    sibling = tmp_path / "wl-preproc" / "docs" / "schemas"
+    sibling.mkdir(parents=True)
+    (sibling / "session_manifest.json").write_text("{}")
+    data = {**GOOD, "publishes": [{
+        "name": "x", "kind": "json-schema", "stability": "stable",
+        "at": "../wl-preproc/docs/schemas/session_manifest.json", "what": "y",
+    }]}
+    findings = check_mapping(data, root=root)
+    c009 = [f for f in findings if f.code == "C009"]
+    assert len(c009) == 1
+    assert "outside" in c009[0].message
+
+
+def test_c009_permits_a_dotdot_that_stays_inside_the_package(tmp_path):
+    """`docs/../docs/schemas/x.json` normalizes to a path still under
+    `root`. The escape check must not punish a `..` that never actually
+    leaves the package, only one that does."""
+    p = tmp_path / "docs" / "schemas"
+    p.mkdir(parents=True)
+    (p / "x.json").write_text("{}")
+    data = {**GOOD, "publishes": [{
+        "name": "x", "kind": "json-schema", "stability": "stable",
+        "at": "docs/../docs/schemas/x.json", "what": "y",
+    }]}
+    assert "C009" not in [f.code for f in check_mapping(data, root=tmp_path)]
+
+
+def test_c009_still_skips_an_absolute_path_that_also_contains_dotdot(tmp_path):
+    """The absolute-path exemption must short-circuit before the escape
+    check ever runs: an absolute path is out of C009's scope entirely, not
+    merely a path that happens not to escape."""
+    data = {**GOOD, "publishes": [{
+        "name": "x", "kind": "nwb", "stability": "stable",
+        "at": "/../etc/passwd", "what": "y",
+    }]}
+    assert "C009" not in [f.code for f in check_mapping(data, root=tmp_path)]
+
+
+def test_c010_reports_an_artifact_with_no_prose():
+    data = {**GOOD, "publishes": [
+        {"name": "x", "kind": "json-schema", "stability": "stable"},
+    ]}
+    c010 = [f for f in check_mapping(data) if f.code == "C010"]
+    assert len(c010) == 1 and "x" in c010[0].message
+
+
+def test_c011_reports_an_unknown_stability():
+    data = {**GOOD, "publishes": [
+        {"name": "x", "kind": "k", "stability": "eventually", "what": "w"},
+    ]}
+    c011 = [f for f in check_mapping(data) if f.code == "C011"]
+    assert len(c011) == 1
+    assert "eventually" in c011[0].message
+
+
+def test_c011_reports_a_missing_stability():
+    data = {**GOOD, "publishes": [{"name": "x", "kind": "k", "what": "w"}]}
+    assert "C011" in [f.code for f in check_mapping(data)]
+
+
+def test_c012_reports_owning_and_consuming_one_artifact():
+    data = {**GOOD,
+            "publishes": [{"name": "x", "kind": "k", "stability": "stable",
+                           "what": "w"}],
+            "consumes": [{"name": "x"}]}
+    c012 = [f for f in check_mapping(data) if f.code == "C012"]
+    assert len(c012) == 1 and "x" in c012[0].message
+
+
+def test_c012_permits_consuming_an_artifact_this_package_only_mirrors():
+    """wl-preproc mirrors syncbox-log-header and also reads sync box logs."""
+    data = {**GOOD,
+            "publishes": [{"name": "x", "kind": "k", "stability": "stable",
+                           "what": "w", "mirrors": "wl-sync"}],
+            "consumes": [{"name": "x"}]}
+    assert "C012" not in [f.code for f in check_mapping(data)]
+
+
+def test_the_new_rules_never_raise(tmp_path):
+    junk = ["x", 3, None, [None], [{}], [{"name": None}], [[1]],
+            [{"name": "a", "at": 7}], [{"name": "a", "stability": 3}]]
+    for j in junk:
+        assert isinstance(check_mapping({**GOOD, "publishes": j}, root=tmp_path), list)
+        assert isinstance(check_mapping({**GOOD, "consumes": j}), list)
+
+
+def test_check_file_supplies_the_package_directory(tmp_path):
+    """The path rule must work through the real entry point, not only when a
+    test passes root by hand."""
+    import yaml
+    (tmp_path / "wl.yaml").write_text(yaml.safe_dump(ART_GOOD))
+    assert "C009" in [f.code for f in check_file(tmp_path / "wl.yaml")]
