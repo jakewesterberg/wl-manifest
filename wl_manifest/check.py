@@ -276,21 +276,67 @@ def _looks_repo_relative(at: str) -> bool:
     on a server. `<runtime — the archive path…>` is prose in a field that
     usually holds a path, which is exactly what `at` is for when the artifact
     is not a file in the repository.
+
+    This is a *scope* test, not a *safety* test: it decides whether `at` is
+    the kind of value C009 should look at all, not whether the value it
+    found is trustworthy. `../wl-preproc/x.json` passes it — not absolute, no
+    `<` — which is exactly why `_escapes_root` exists as a second, separate
+    check: looking like a repo path and staying inside the repo are different
+    questions, and conflating them is what let `../wl-preproc/...` read a
+    sibling package silently.
     """
     return not at.startswith("/") and "<" not in at
+
+
+def _escapes_root(root: Path, at: str) -> bool:
+    """Whether `root / at`, once resolved, falls outside `root`.
+
+    A lexical count of `..` segments would catch `../wl-preproc/x.json`, but
+    it would miss a `docs/link` that looks perfectly contained and is
+    actually a symlink pointing somewhere else. Resolving both sides closes
+    both holes at once: `Path.resolve()` collapses every `..` *and* follows
+    every symlink it meets along the way, so a candidate that escapes either
+    way ends up literally outside `root`'s own resolved form, and one
+    `is_relative_to` comparison catches both.
+
+    `root` always exists by the time this runs — it is `wl.yaml`'s own
+    parent directory, or a caller's `tmp_path` — so resolving it is never
+    surprising. The candidate need not exist yet; `resolve()` tolerates a
+    non-existent tail the same way `os.path.normpath` would, which is what
+    lets this run *before* the existence check rather than after it: an
+    escaping path is wrong regardless of whether something happens to exist
+    at the far end, and must be reported as escaping, not as merely missing.
+
+    A handful of OS-level failures — a symlink loop, a path component the
+    filesystem itself rejects (this module has already seen one real one:
+    check_file's own embedded-null-byte case) — surface out of `resolve()`
+    as `OSError`/`ValueError` rather than a clean answer either way. Between
+    raising (forbidden everywhere in this module) and silently treating an
+    unreadable path as safely contained, the finding that gets a human to
+    look is the closer of the two to being right: "cannot confirm this stays
+    inside the package" reads much closer to "does not" than to "does".
+    """
+    try:
+        return not (root / at).resolve().is_relative_to(root.resolve())
+    except (OSError, ValueError, RuntimeError):
+        return True
 
 
 def _artifact_findings(data: dict, root: Path | None) -> list[CheckFinding]:
     """C009-C012 — the `publishes` and `consumes` rules.
 
-    C009 only checks an `at` that looks like a path this repository should
-    contain (see `_looks_repo_relative`), and only when `root` is given — a
+    C009 only looks at an `at` that looks like a path this repository should
+    contain (`_looks_repo_relative`), and only when `root` is given — a
     manifest checked as a bare mapping, with no directory behind it, cannot
-    have this rule guess one. C010 and C011 need no filesystem access at all,
-    so they run regardless of `root`. C012 exempts a `mirrors` entry:
-    `wl-preproc` legitimately both re-exports `wl-sync`'s `syncbox-log-header`
-    and reads sync box logs, so only the artifact's real owner — never a
-    package that only mirrors it — can trigger "owns and consumes itself".
+    have this rule guess one. Looking repo-relative is necessary but not
+    sufficient: `_escapes_root` catches the case that slips past a purely
+    lexical check, `../another-package/x.json`, which is neither absolute
+    nor a placeholder and yet is not a path in this repository at all. C010
+    and C011 need no filesystem access at all, so they run regardless of
+    `root`. C012 exempts a `mirrors` entry: `wl-preproc` legitimately both
+    re-exports `wl-sync`'s `syncbox-log-header` and reads sync box logs, so
+    only the artifact's real owner — never a package that only mirrors it —
+    can trigger "owns and consumes itself".
     """
     arts = data.get("publishes")
     findings: list[CheckFinding] = []
@@ -310,15 +356,23 @@ def _artifact_findings(data: dict, root: Path | None) -> list[CheckFinding]:
                 and isinstance(at, str)
                 and at
                 and _looks_repo_relative(at)
-                and not (root / at).exists()
             ):
-                findings.append(
-                    CheckFinding(
-                        "error", "C009",
-                        f"publishes {name!r} at {at!r}, which is not in this "
-                        "repository",
+                if _escapes_root(root, at):
+                    findings.append(
+                        CheckFinding(
+                            "error", "C009",
+                            f"publishes {name!r} at {at!r}, which is outside "
+                            "this package",
+                        )
                     )
-                )
+                elif not (root / at).exists():
+                    findings.append(
+                        CheckFinding(
+                            "error", "C009",
+                            f"publishes {name!r} at {at!r}, which is not in "
+                            "this repository",
+                        )
+                    )
 
             if not art.get("what"):
                 findings.append(

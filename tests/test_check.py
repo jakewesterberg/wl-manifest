@@ -252,6 +252,52 @@ def test_c009_does_not_check_an_absolute_path(tmp_path):
     assert "C009" not in [f.code for f in check_mapping(data, root=tmp_path)]
 
 
+def test_c009_reports_a_path_that_escapes_the_package(tmp_path):
+    """Not absolute, no `<` -- ../wl-preproc/... looks repo-relative by
+    `_looks_repo_relative`'s own rule. It is not: it reads a sibling
+    package. The file genuinely exists one directory up, mirroring the
+    coordinator's own reproduction, so a plain existence check would stay
+    silent -- only a containment check catches this."""
+    root = tmp_path / "wl-manifest"
+    root.mkdir()
+    sibling = tmp_path / "wl-preproc" / "docs" / "schemas"
+    sibling.mkdir(parents=True)
+    (sibling / "session_manifest.json").write_text("{}")
+    data = {**GOOD, "publishes": [{
+        "name": "x", "kind": "json-schema", "stability": "stable",
+        "at": "../wl-preproc/docs/schemas/session_manifest.json", "what": "y",
+    }]}
+    findings = check_mapping(data, root=root)
+    c009 = [f for f in findings if f.code == "C009"]
+    assert len(c009) == 1
+    assert "outside" in c009[0].message
+
+
+def test_c009_permits_a_dotdot_that_stays_inside_the_package(tmp_path):
+    """`docs/../docs/schemas/x.json` normalizes to a path still under
+    `root`. The escape check must not punish a `..` that never actually
+    leaves the package, only one that does."""
+    p = tmp_path / "docs" / "schemas"
+    p.mkdir(parents=True)
+    (p / "x.json").write_text("{}")
+    data = {**GOOD, "publishes": [{
+        "name": "x", "kind": "json-schema", "stability": "stable",
+        "at": "docs/../docs/schemas/x.json", "what": "y",
+    }]}
+    assert "C009" not in [f.code for f in check_mapping(data, root=tmp_path)]
+
+
+def test_c009_still_skips_an_absolute_path_that_also_contains_dotdot(tmp_path):
+    """The absolute-path exemption must short-circuit before the escape
+    check ever runs: an absolute path is out of C009's scope entirely, not
+    merely a path that happens not to escape."""
+    data = {**GOOD, "publishes": [{
+        "name": "x", "kind": "nwb", "stability": "stable",
+        "at": "/../etc/passwd", "what": "y",
+    }]}
+    assert "C009" not in [f.code for f in check_mapping(data, root=tmp_path)]
+
+
 def test_c010_reports_an_artifact_with_no_prose():
     data = {**GOOD, "publishes": [
         {"name": "x", "kind": "json-schema", "stability": "stable"},
