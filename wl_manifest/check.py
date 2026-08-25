@@ -1,11 +1,18 @@
-"""Check one package's `wl.yaml`, and nothing else.
+"""Check one package's `wl.yaml`, and nothing outside that package.
 
-This module is deliberately the narrowest thing in the repository. It reads a
-single file, imports no registry and no workspace, and never raises: every
-fault it finds becomes a `CheckFinding`. That shape is what lets it run inside
-another repository's CI, where failing on a neighbour's fault would be
-indefensible — `wl-orchestrator`'s `wlo validate` cannot be used there for
-exactly that reason, as its `cli/main.py` records.
+This module is deliberately the narrowest thing in the repository. It reads the
+manifest and, where a rule needs it, files the manifest points at inside the
+same package directory — never another package, never the registry, never the
+network. It imports no registry and no workspace, and never raises: every fault
+it finds becomes a `CheckFinding`. That shape is what lets it run inside another
+repository's CI, where failing on a neighbour's fault would be indefensible —
+`wl-orchestrator`'s `wlo validate` cannot be used there for exactly that reason,
+as its `cli/main.py` records.
+
+The contract was once "reads a single file". C009 widened it: a checker that
+cannot see whether a declared schema is still on disk cannot catch the likeliest
+drift in `publishes`, and that check belongs in the repository where the file
+lives. The invariant that matters is that it never reads another package.
 
 The rules answer one question: is this manifest true about the repository it
 sits in? Not "is the lab consistent" — that stays in `wl-orchestrator`'s
@@ -14,14 +21,14 @@ sits in? Not "is the lab consistent" — that stays in `wl-orchestrator`'s
 
 from __future__ import annotations
 
-import pathlib
 from dataclasses import dataclass
+from pathlib import Path
 
 import yaml
 from pydantic import ValidationError
 
 from wl_manifest.hosts import HostSelector
-from wl_manifest.models import STAGES_WITH_REPO, PackageManifest
+from wl_manifest.models import STABILITIES, STAGES_WITH_REPO, PackageManifest
 
 
 @dataclass(frozen=True)
@@ -42,7 +49,7 @@ def has_errors(findings: list[CheckFinding]) -> bool:
     return any(f.level == "error" for f in findings)
 
 
-def check_file(path: pathlib.Path) -> list[CheckFinding]:
+def check_file(path: Path) -> list[CheckFinding]:
     """Read and check one manifest. Never raises.
 
     `Path.read_text` decodes as it reads, so a manifest that is not valid
@@ -69,16 +76,23 @@ def check_file(path: pathlib.Path) -> list[CheckFinding]:
                 f"{path} must be a mapping at the top level, found {kind}",
             )
         ]
-    return check_mapping(data)
+    return check_mapping(data, root=path.parent)
 
 
-def check_mapping(data: dict) -> list[CheckFinding]:
+def check_mapping(data: dict, root: Path | None = None) -> list[CheckFinding]:
     """Every rule, run over an already-parsed mapping.
 
     Rules run independently and none short-circuits another. A missing `why`
     used to abort parsing and take the whole manifest with it, which meant one
     unexplained version pin silently emptied a machine's entire stack. Here it
     is one finding among however many others are true at the same time.
+
+    `root` is the package directory the manifest sits in — the only thing C009
+    needs that the mapping itself cannot supply, since confirming a declared
+    path exists means looking outside `data`. It is optional and defaults to
+    `None` so this function stays callable on a bare mapping with no directory
+    behind it, the way every rule above already is; C009 is silently skipped
+    rather than guessing at a root it was never given.
     """
     findings: list[CheckFinding] = []
     findings += _schema_findings(data)
@@ -88,6 +102,7 @@ def check_mapping(data: dict) -> list[CheckFinding]:
     findings += _lifecycle_findings(data)
     findings += _unknown_key_findings(data)
     findings += _status_findings(data)
+    findings += _artifact_findings(data, root)
     return findings
 
 
@@ -252,3 +267,90 @@ def _status_findings(data: dict) -> list[CheckFinding]:
             )
         ]
     return []
+
+
+def _looks_repo_relative(at: str) -> bool:
+    """A path this repository should contain, as opposed to a description.
+
+    `docs/schemas/x.json` is checkable. `/data/sessions` is a runtime location
+    on a server. `<runtime — the archive path…>` is prose in a field that
+    usually holds a path, which is exactly what `at` is for when the artifact
+    is not a file in the repository.
+    """
+    return not at.startswith("/") and "<" not in at
+
+
+def _artifact_findings(data: dict, root: Path | None) -> list[CheckFinding]:
+    """C009-C012 — the `publishes` and `consumes` rules.
+
+    C009 only checks an `at` that looks like a path this repository should
+    contain (see `_looks_repo_relative`), and only when `root` is given — a
+    manifest checked as a bare mapping, with no directory behind it, cannot
+    have this rule guess one. C010 and C011 need no filesystem access at all,
+    so they run regardless of `root`. C012 exempts a `mirrors` entry:
+    `wl-preproc` legitimately both re-exports `wl-sync`'s `syncbox-log-header`
+    and reads sync box logs, so only the artifact's real owner — never a
+    package that only mirrors it — can trigger "owns and consumes itself".
+    """
+    arts = data.get("publishes")
+    findings: list[CheckFinding] = []
+    owned: set[str] = set()
+
+    if isinstance(arts, list):
+        for art in arts:
+            if not isinstance(art, dict):
+                continue
+            name = art.get("name", "(unnamed)")
+            if not art.get("mirrors") and isinstance(art.get("name"), str):
+                owned.add(art["name"])
+
+            at = art.get("at")
+            if (
+                root is not None
+                and isinstance(at, str)
+                and at
+                and _looks_repo_relative(at)
+                and not (root / at).exists()
+            ):
+                findings.append(
+                    CheckFinding(
+                        "error", "C009",
+                        f"publishes {name!r} at {at!r}, which is not in this "
+                        "repository",
+                    )
+                )
+
+            if not art.get("what"):
+                findings.append(
+                    CheckFinding(
+                        "error", "C010",
+                        f"publishes {name!r} with no `what`; the shape is "
+                        "recoverable by opening it, the meaning is not",
+                    )
+                )
+
+            stability = art.get("stability")
+            if stability not in STABILITIES:
+                findings.append(
+                    CheckFinding(
+                        "error", "C011",
+                        f"publishes {name!r} with stability {stability!r}; "
+                        f"expected one of {sorted(STABILITIES)}",
+                    )
+                )
+
+    taken = data.get("consumes")
+    if isinstance(taken, list):
+        for item in taken:
+            if not isinstance(item, dict):
+                continue
+            if item.get("name") in owned:
+                findings.append(
+                    CheckFinding(
+                        "error", "C012",
+                        f"both owns and consumes {item['name']!r}; a package "
+                        "cannot depend on itself. A mirrored artifact is "
+                        "exempt — it is owned elsewhere",
+                    )
+                )
+    return findings
