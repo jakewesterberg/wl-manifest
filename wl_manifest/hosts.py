@@ -1,6 +1,6 @@
 """Host selectors — `class` or `class/role`.
 
-Host identity belongs to `wl-softrepo`, whose `docs/naming.md` defines
+Host identity belongs to `wl-stack`, whose `docs/naming.md` defines
 `<org>-<class><n>` and the rule that an institutionally licensed machine is
 `wl-*` and a personal one is `wh-*`. This module restates only the class list,
 because a selector cannot be parsed without it; everything else about hosts is
@@ -35,7 +35,7 @@ class HostSelector:
         if klass not in HOST_CLASSES:
             raise ValueError(
                 f"unknown host class {klass!r} in {text!r}; "
-                f"wl-softrepo defines {sorted(HOST_CLASSES)}"
+                f"wl-stack defines {sorted(HOST_CLASSES)}"
             )
         return cls(klass, parts[1] if len(parts) == 2 else None)
 
