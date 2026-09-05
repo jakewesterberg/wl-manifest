@@ -2,6 +2,8 @@
 name = "wl-manifest"
 version = "0.1.0"
 description = "The wl.yaml contract for Westerberg Lab packages"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = [
     "pydantic>=2.6",

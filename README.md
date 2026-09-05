@@ -51,3 +51,11 @@ schema's `Literal` aliases. `wl_manifest.hosts` — `HostSelector`, the `class`
 or `class/role` grammar host identity is written in. `wl_manifest.check` — the
 rules themselves, and `CheckFinding`. None of it reads a registry, because
 there isn't one here to read.
+
+## License
+
+Apache-2.0 — see `LICENSE`. Copyright 2026 Jacob A. Westerberg.
+
+This repository was public without a licence, which means all rights reserved and
+no permission to use it. Apache-2.0 applied 2026-09-05, matching the rest of the
+`wl-*` family.
